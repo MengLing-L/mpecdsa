@@ -18,6 +18,7 @@ use std::time::Instant;
 
 use crate::channelstream::spawn_n2_channelstreams;
 use crate::utils::Curve;
+use crate::utils::K256;
 use crate::utils::P521;
 use crate::utils::Scalar;
 
@@ -556,6 +557,7 @@ pub fn mul_transfer_fully(
             s1[1].as_mut().unwrap(),
         );
         let time = start.elapsed().as_nanos();
+        println!("OT based MtA setup time : {}ns", time.clone());
         let extensions = sender.mul_extend(1, &dro, r1[1].as_mut().unwrap());
 
         let ta1 = sender
@@ -617,7 +619,7 @@ pub fn mul_transfer_fully(
 
 #[test]
 fn test_mul_trans1(){
-    let curve = &P521;
+    let curve = &K256;
  let mut rng = rand::thread_rng();
  let alpha = curve.rand_scalar(&mut rng);
  let mut beta:Vec<Scalar> = Vec::with_capacity(10);
