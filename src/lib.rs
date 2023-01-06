@@ -38,7 +38,7 @@ should be done more intelligently in the future.
 */
 
 const RO_TAG_SIZE: usize = 20; // Why 20? Because our vectorized SHA-256 impl takes only 52 = 32+20 bytes as input
-pub const HASH_SIZE: usize = 66;
+pub const HASH_SIZE: usize = 32;
 const HASH_BLOCK_SIZE: usize = RO_TAG_SIZE + HASH_SIZE;
 // const ENCODING_PER_ELEMENT_BITS: usize = SecpOrd::NBITS + 160;
 const ENCODING_EXTRA_BITS: usize = 0; // From IN96, this must be 2*s
@@ -51,7 +51,7 @@ fn hash_multi(src: &[u8]) -> Vec<Vec<u8>> {
 }
 
 fn hash(msg: &[u8]) -> Vec<u8> {
-    let mut r = Sha512::digest(msg).to_vec();
+    let mut r = Sha256::digest(msg).to_vec();
 	r.resize(HASH_SIZE, 0);
 	r
 }
