@@ -219,6 +219,20 @@ pub struct Scalar {
 }
 
 impl Scalar {
+    pub fn nnmod(&self) -> Self {
+        let mut x = BigNum::new().unwrap();
+        x.nnmod(
+            &self.v,
+            &self.curve.order,
+            &mut BigNumContext::new().unwrap(),
+        )
+        .unwrap();
+        Self {
+            v: x,
+            curve: self.curve,
+        }
+    }
+
     pub fn from_bytes(curve: &'static Curve, bytes: &[u8]) -> Self {
         Self {
             v: BigNum::from_slice(&bytes).unwrap(),
