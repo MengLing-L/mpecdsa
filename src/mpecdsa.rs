@@ -10,6 +10,7 @@
 
 use std::io::prelude::*;
 use std::io::{BufWriter, Cursor};
+use std::time::Instant;
 
 use byteorder::{ByteOrder, LittleEndian};
 
@@ -358,7 +359,8 @@ impl Bob2P {
         rng: &mut R,
         recv: &mut TR,
         send: &mut TW,
-    ) -> Result<(Scalar, Scalar), Box<dyn Error>> {
+    ) -> Result<(u128, u128, Scalar, Scalar), Box<dyn Error>> {
+        let timer1 = Instant::now();
         let secp_bytes = self.curve.fq_bytes * 2 + 1;
         let fr_bytes = self.curve.fr_bytes;
         let mut bufsend = BufWriter::new(send);
@@ -457,7 +459,9 @@ impl Bob2P {
         let gamma2 = t2bg.add(&t1bpk);
         let gamma2raw = [dro.next_dyadic_tag(), gamma2.to_bytes()].concat();
         let mut enckey = hash(&gamma2raw);
+        let offline: u128 = timer1.elapsed().as_nanos();
 
+        let timer2 = Instant::now();
         // compute bob's signature share m_b
         let m_b = t1baug.mul(&z).add(&t2b.mul(&rx));
 
@@ -475,13 +479,14 @@ impl Bob2P {
         // end second message (alice to bob)
 
         // verify signature. Abort if it's incorrect.
+        let online: u128 = timer2.elapsed().as_nanos();
         assert!(ecdsa_verify(
             self.curve,
             msg,
             (rx.clone(), s.clone()),
             self.pk.clone()
         ));
-        Ok((rx, s))
+        Ok((offline, online, rx, s))
     }
 }
 
@@ -730,7 +735,7 @@ impl ThresholdSigner {
         rng: &mut R,
         recv: &mut [Option<TR>],
         send: &mut [Option<TW>],
-    ) -> Result<Option<(Scalar, Scalar)>, Box<dyn Error>> {
+    ) -> Result<Option<(u128, u128, Scalar, Scalar)>, Box<dyn Error>> {
         assert_eq!(counterparties.len(), self.threshold - 1);
 
         if self.threshold == 2 {
@@ -778,7 +783,7 @@ impl ThresholdSigner {
         let counterparty = counterparties[0];
 
         if self.playerindex > counterparty {
-            let (r, s, p) = self.sign2t_and_gen_refresh_bob(
+            let (offline, online, r, s, p) = self.sign2t_and_gen_refresh_bob(
                 counterparty,
                 msg,
                 Some(tag),
@@ -820,7 +825,7 @@ impl ThresholdSigner {
         rng: &mut R,
         recv: &mut [Option<TR>],
         send: &mut [Option<TW>],
-    ) -> Result<(Scalar, Scalar), Box<dyn Error>> {
+    ) -> Result<(u128, u128, Scalar, Scalar), Box<dyn Error>> {
         let secp_bytes = self.curve.fq_bytes * 2 + 1;
         let fr_bytes = self.curve.fr_bytes;
         self.ro.apply_subgroup_list(counterparties)?;
@@ -1232,7 +1237,7 @@ impl ThresholdSigner {
             (rx.clone(), sig.clone()),
             self.pk.clone()
         ));
-        Ok((rx, sig))
+        Ok((0, 0, rx, sig))
     }
 
     fn sign2t_alice<TR: Read, TW: Write + Send, R: Rng>(
@@ -1407,6 +1412,7 @@ impl ThresholdSigner {
         let gamma2 = Point::add(&t2ag, &t1apk);
         let gamma2raw = [dro.next_dyadic_tag(), gamma2.to_bytes()].concat();
         let mut enckey = hash(&gamma2raw);
+        
         for ii in 0..fr_bytes {
             ma[ii] ^= enckey[ii];
         }
@@ -1427,10 +1433,10 @@ impl ThresholdSigner {
         rng: &mut R,
         recv: &mut TR,
         send: &mut TW,
-    ) -> Result<(Scalar, Scalar), Box<dyn Error>> {
+    ) -> Result<(u128, u128, Scalar, Scalar), Box<dyn Error>> {
         let res = self.sign2t_and_gen_refresh_bob(counterparty, msg, None, rng, recv, send);
-        if let Ok((r0, r1, _)) = res {
-            Ok((r0, r1))
+        if let Ok((offline,online, r0, r1, _)) = res {
+            Ok((offline, online, r0, r1))
         } else {
             Err(res.unwrap_err())
         }
@@ -1444,7 +1450,8 @@ impl ThresholdSigner {
         rng: &mut R,
         recv: &mut TR,
         send: &mut TW,
-    ) -> Result<(Scalar, Scalar, Option<ProactiveRefreshPackage>), Box<dyn Error>> {
+    ) -> Result<(u128, u128, Scalar, Scalar, Option<ProactiveRefreshPackage>), Box<dyn Error>> {
+        let timer1 = Instant::now();
         let secp_bytes = self.curve.fq_bytes * 2 + 1;
         let fr_bytes = self.curve.fr_bytes;
         let (parties, prunedcpindex) = if self.playerindex > counterparty {
@@ -1585,6 +1592,10 @@ impl ThresholdSigner {
         let gamma2raw = [dro.next_dyadic_tag(), gamma2.to_bytes()].concat();
         let mut enckey = hash(&gamma2raw);
 
+        let offline: u128 = timer1.elapsed().as_nanos();
+        //   println!("Doerner19 offline time: {}ns", offline);
+
+		let timer2 = Instant::now();
         // compute bob's signature share m_b
         let m_b = t1baug.mul(&z).add(&t2b.mul(&rx));
 
@@ -1602,13 +1613,14 @@ impl ThresholdSigner {
         // end second message (alice to bob)
 
         // verify signature. Abort if it's incorrect.
+        let online: u128 = timer2.elapsed().as_nanos();
         assert!(ecdsa_verify(
             self.curve,
             msg,
             (rx.clone(), s.clone()),
             self.pk.clone()
         ));
-        Ok((rx, s, refreshpackage))
+        Ok((offline, online, rx, s, refreshpackage))
     }
 
     fn gen_refresh_2t<TR: Read, TW: Write, R: Rng>(
@@ -1757,7 +1769,7 @@ impl ThresholdSigner {
 pub fn doerner_2psign<R: Rng>(
     curve: &'static Curve, 
     rng: &mut R,
-) -> (Scalar, Scalar){
+) -> (u128, u128){
     let msg = "The Quick Brown Fox Jumped Over The Lazy Dog".as_bytes();
 
     let (ska, pk) = curve.rand_scalar_and_point(rng);
@@ -1807,7 +1819,7 @@ pub fn doerner_2psign<R: Rng>(
 pub fn doerner_threa_sign<R: Rng>(
     curve: &'static Curve, 
     rng: &mut R,
-) -> (Scalar, Scalar){
+) -> (u128, u128){
     let (mut sendvec, mut recvvec) = spawn_n2_channelstreams(2);
 
         let mut s0 = sendvec.remove(0);
