@@ -1,5 +1,5 @@
 [package]
-name = "mpecdsa"
+name = "mpecdsa1"
 version = "0.1.0"
 authors = ["abhi <abhi@neu.edu>", "Jack Doerner <j@ckdoerner.net>"]
 edition = "2021"
