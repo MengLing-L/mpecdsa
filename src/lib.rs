@@ -2,6 +2,7 @@
 #![feature(slice_as_chunks)]
 #![feature(generic_const_exprs)]
 
+pub mod mpecdsa_error;
 pub mod channelstream;
 pub mod mpecdsa; // threshold ECDSA
 pub mod mpmul; // multiparty multiplication

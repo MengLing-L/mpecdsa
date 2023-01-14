@@ -19,6 +19,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use rayon::prelude::*;
 
+use crate::channelstream::spawn_n2_channelstreams;
 use crate::utils::{Curve, Point, Scalar};
 
 use super::mpmul::*;
@@ -27,6 +28,8 @@ use super::ro::*;
 use super::zkpok::*;
 use super::*;
 use std::error::Error;
+use std::thread;
+use super::mpecdsa_error::*;
 
 pub fn ecdsa_verify(curve: &'static Curve, msg: &[u8], sig: (Scalar, Scalar), pk: Point) -> bool {
     let r = sig.0;
@@ -293,7 +296,7 @@ impl Bob2P {
         rng: &mut R,
         recv: &mut TR,
         send: &mut TW,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, MPECDSAError> {
         let ro = GroupROTagger::from_network_unverified(
             1,
             rng,
@@ -319,7 +322,7 @@ impl Bob2P {
             &ModelessGroupROTagger::new(&ro, false),
 			rng,
             send,
-        )?;
+        );
 
         // recv pk_a
         recv.read_exact(&mut buf)?;
@@ -331,10 +334,10 @@ impl Bob2P {
             &proofcommitment,
             &ModelessDyadicROTagger::new(&ro.get_dyadic_tagger(0), false),
             recv
-        )?);
+        ).is_ok());
 
         // initialize multiplication
-        let mul = mul::MulRecver::new(curve, &ro.get_dyadic_tagger(0), rng, recv, send)?;
+        let mul = mul::MulRecver::new(curve, &ro.get_dyadic_tagger(0), rng, recv, send).unwrap();
 
         // verify PoK to which alice previously committed, then calc pk, setup OT exts
         let pk = pka.mul(&skb);
@@ -490,7 +493,7 @@ impl ThresholdSigner {
         rng: &mut R,
         recv: &mut [Option<TR>],
         send: &mut [Option<TW>],
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, MPECDSAError> {
         let secp_bytes = curve.fq_bytes * 2 + 1;
         let fr_bytes = curve.fr_bytes;
         assert_eq!(recv.len(), send.len());
@@ -563,7 +566,7 @@ impl ThresholdSigner {
                 &point_com,
                 &ModelessGroupROTagger::new(&ro, false),
 				rng
-			)?;
+			).unwrap();
             for ii in 0..playercount {
                 if ii != playerindex {
                     send[ii].as_mut().unwrap().write(&proofcommitment)?;
@@ -602,7 +605,7 @@ impl ThresholdSigner {
                         &othercommitments[ii],
                         &ModelessDyadicROTagger::new(&ro.get_dyadic_tagger(ii), false),
                         &mut recv[ii].as_mut().unwrap()
-                    )?);
+                    ).is_ok());
                     points_com.push(this_point_com);
                 }
             }
@@ -1750,6 +1753,97 @@ impl ThresholdSigner {
         Ok(())
     }
 }
+
+pub fn doerner_2psign<R: Rng>(
+    curve: &'static Curve, 
+    rng: &mut R,
+) -> (Scalar, Scalar){
+    let msg = "The Quick Brown Fox Jumped Over The Lazy Dog".as_bytes();
+
+    let (ska, pk) = curve.rand_scalar_and_point(rng);
+    let (skb, pk) = curve.rand_scalar_and_point(rng);
+    
+    
+    let (mut writ_a, mut read_b) = channelstream::new_channelstream();
+    let (mut writ_b, mut read_a) = channelstream::new_channelstream();
+    
+    let thandle = thread::spawn(move || {
+        
+        let mut rng = rand::thread_rng();
+        let bob = Bob2P::new(curve, &skb,&mut rng, &mut read_b, &mut writ_b);
+        if bob.is_err() {
+            return Err(bob.err().unwrap());
+        }
+        let bob = bob.unwrap();
+      
+        let mut results = Vec::with_capacity(10);
+        
+        results.push(bob.sign(&msg, &mut rng, &mut read_b, &mut writ_b).unwrap());
+        
+      
+        Ok(results)
+    });
+   
+    let alice = Alice2P::new(curve,&ska, rng, &mut read_a, &mut writ_a);
+    assert!(alice.is_ok());
+    let alice = alice.unwrap();
+    let mut aliceresults = Vec::with_capacity(10);
+    
+    aliceresults.push(alice.sign(&msg, rng, &mut read_a, &mut writ_a));
+    
+   
+    let bobresults = thandle.join().unwrap();
+    assert!(bobresults.is_ok());
+    let bobresults = bobresults.unwrap();
+    let bob_result = bobresults[0].clone();
+    let offline = bob_result.0;
+    let online = bob_result.1;
+    
+    assert!(aliceresults[0].is_ok());
+    //assert!(bobresults[0].is_ok());
+    return (offline, online);
+}
+
+pub fn doerner_threa_sign<R: Rng>(
+    curve: &'static Curve, 
+    rng: &mut R,
+) -> (Scalar, Scalar){
+    let (mut sendvec, mut recvvec) = spawn_n2_channelstreams(2);
+
+        let mut s0 = sendvec.remove(0);
+        let mut r0 = recvvec.remove(0);
+
+        let thandlea = thread::spawn(move || {
+            let mut rng = rand::thread_rng();
+            let mut alice = ThresholdSigner::new(curve, 0, 2, &mut rng, &mut r0[..], &mut s0[..]).unwrap();
+            let result1 = alice.sign(&[1], &"etaoin shrdlu".as_bytes(), &mut rng, &mut r0[..], &mut s0[..]).unwrap();
+            result1
+        });
+
+        let mut s1 = sendvec.remove(0);
+        let mut r1 = recvvec.remove(0);
+
+        let thandleb = thread::spawn(move || {
+            let mut rng = rand::thread_rng();
+            let mut bob = ThresholdSigner::new(curve, 1, 2, &mut rng, &mut r1[..], &mut s1[..]).unwrap();
+            let result1 = bob.sign(&[0], &"etaoin shrdlu".as_bytes(), &mut rng, &mut r1[..], &mut s1[..]).unwrap();
+            result1
+        });
+
+    
+        let alice = thandlea.join().unwrap();
+        //assert!(alice.is_ok());
+       
+        let bob = thandleb.join().unwrap();
+        //let bob_result = bob.take();
+
+        //assert!(bob.is_ok());
+        let offline = bob.as_ref().unwrap().0.clone();
+        let online = bob.unwrap().1.clone();
+        return (offline, online)
+    
+}
+
 
 #[cfg(test)]
 mod tests {
